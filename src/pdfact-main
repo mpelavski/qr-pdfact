@@ -1,0 +1,168 @@
+#!/usr/bin/ruby
+
+#    Copyright (C) 2021-2023 Aceitera General Deheza
+
+require 'tempfile'
+require 'fileutils'
+require 'base64' 
+
+# Timeout for 'convert' command.
+$timeout = 20
+
+# Regexp for AFIP's URL.
+$urlregexp = 'https:\/?\/www.afip.gob.ar\/\s*fe\/\s*qr\/?\?\r?\n?p\='
+
+
+def trypng(file)
+    temp_image = Tempfile.new(['pdfact','.png'])
+    temp_image.close
+
+    STDERR.puts "  - Converting PDF to PNG." if $debug       
+    system("/usr/bin/convert -limit time #{$timeout} -strip -density 300 '#{file}'[0] -quality 100 -background white -alpha remove -alpha off #{temp_image.path}")
+
+    STDERR.puts "    Image: #{temp_image.path}" if $debug
+
+    STDERR.puts "  - Trying zbarimg." if $debug       
+    return `/usr/bin/zbarimg --set *.enable=0 --set qrcode.enable=1 -q #{temp_image.path}`.split('QR-Code:').grep(/#{$urlregexp}/i)
+end    
+
+
+def tryimages(path)
+    Dir.mktmpdir do |dir| 
+        # Extract images
+        STDERR.puts "  - Extracting images." if $debug
+        system("/usr/bin/pdfimages -j -q '#{path}' #{dir}/img")
+        
+        # Convert PBM images to PNG
+        STDERR.puts "  Converting PBM images to PNG." if $debug
+        Dir.glob("#{dir}/img*.pbm") do |pbm|
+            STDERR.puts "    Image: #{pbm}" if $debug
+            system("/usr/bin/convert -limit time #{$timeout} #{pbm} -morphology open square:1 -threshold 76% #{dir}/orig.png")            
+        end
+        
+        # Invert PBM images
+        STDERR.puts "  Inverting PBM images." if $debug
+        Dir.glob("#{dir}/img*.pbm") do |pbm|
+            STDERR.puts "    Image: #{pbm}" if $debug
+            system("/usr/bin/convert -limit time #{$timeout} -negate #{pbm} #{pbm}.png")
+        end
+        
+        # Scale images x 4.
+        STDERR.puts "  - Scaling images." if $debug       
+        Dir.glob("#{dir}/img*") do |image|
+            STDERR.puts "    Image: #{image}" if $debug
+            system("/usr/bin/convert -limit time #{$timeout} #{image} -scale 400%  #{image}-full.png")
+        end
+        STDERR.puts "  - Trying zbarimg." if $debug       
+        zbar = `/usr/bin/zbarimg --set *.enable=0 --set qrcode.enable=1 -q #{dir}/*`.split('QR-Code:').grep(/#{$urlregexp}/i)
+        return zbar 
+    end
+end
+
+def trypdfresize(path, percent)
+    temp_image = Tempfile.new(['pdfact','.png'])
+    temp_image.close
+
+    STDERR.puts "  - Converting PDF to PNG." if $debug       
+    system("/usr/bin/convert -limit time #{$timeout} -strip -density 400 -resize #{percent}% '#{path}'[0] -quality 100 -background white -alpha remove -alpha off +adjoin #{temp_image.path}")
+    STDERR.puts "    Image: #{temp_image.path}" if $debug
+
+    STDERR.puts "  - Trying zbarimg." if $debug       
+    zbar = `/usr/bin/zbarimg --set *.enable=0 --set qrcode.enable=1 -q #{temp_image.path}`.split('QR-Code:').grep(/#{$urlregexp}/i)
+
+    return zbar
+end
+
+def decode(url)
+    url.lstrip!
+    STDERR.puts "  - URL: #{url}" if $debug  
+    data_base64 = url.gsub(/#{$urlregexp}/i, '')
+	
+    STDERR.puts "  - Base 64: #{data_base64}" if $debug
+    
+    begin
+        # Decode base64 string
+        json = Base64.decode64(data_base64)
+        
+        # Remove non printable chars.
+        json.gsub!(/[^[:print:]]/i, '')
+        
+        # Quote all values (problem?)
+        json.gsub!(/:([0-9a-zA-Z].*?)(,|})/,':"\1"\2')
+        
+        ## Quote leading zeroes
+        #json.gsub!(/:(00(\d)*)/,':"\1"')
+        
+        STDERR.puts "  - Json: #{json}" if $debug
+        
+    rescue
+        STDERR.puts "  - Error decoding base64." if $debug
+        json = "" 
+    end
+
+    return json
+end
+
+
+# Main
+
+file = ARGV[0]
+
+if file.nil? then 
+    STDERR.puts "Usage: #{$0} {input.pdf | - } [-d | -D | --debug]"
+    exit 1
+elsif file == '-' then
+    # Read input from STDIN
+    temp_pdf = Tempfile.new(['pdfact','.pdf'])
+    temp_pdf.write(STDIN.read)
+    temp_pdf.close
+
+    file = temp_pdf.path  
+
+elsif ! File.exists? file then
+    STDERR.puts "  File #{file} doesn't exists."
+    exit 1
+elsif ! File.readable? file then
+    STDERR.puts "  Can't read #{file}"
+    exit 1
+end
+
+$debug = ['-d', '-D', '--debug'].include? ARGV[1]
+
+
+STDERR.puts "  Processing #{file}" if $debug 
+
+# First, try converting PDF's first page to PNG.
+STDERR.puts "  Trying PNG conversion." if $debug 
+zbar = trypng(file)
+    
+# Second, try extracting raw images from PDF (3 methods).
+if zbar.empty? then
+    STDERR.puts "  Trying extracting images." if $debug 
+    zbar = tryimages(file)
+end
+
+# Third, try converting PDF's first page to PNG and then shrinking.    
+
+# Try 50%
+if zbar.empty? then
+    STDERR.puts "  Trying shrinking PNG images 50%." if $debug 
+    zbar = trypdfresize(file, 50)
+end
+
+# Try 34%
+if zbar.empty? then
+    STDERR.puts "  Trying shrinking PNG images 34%." if $debug 
+    zbar = trypdfresize(file, 34)
+end
+
+if zbar.empty? then
+    STDERR.puts "  No QR detected." if $debug
+else 
+    STDERR.puts "  Decoding URL." if $debug 
+    puts decode(zbar[-1])
+end
+
+STDERR.puts "  Finished processing #{file}" if $debug 
+
+exit 0

@@ -1,0 +1,28 @@
+{
+  "name": "qr-pdfact",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node src/pdfact7.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "canvas": "^2.11.2",
+    "express": "^4.18.2",
+    "jsqr": "^1.4.0",
+    "mailparser": "^3.6.5",
+    "pdf-image": "^2.0.0",
+    "pdf-parse": "^1.1.1",
+    "pdf-poppler": "^0.2.1",
+    "pdf2image": "^1.2.3",
+    "pdf2pic": "^3.1.0",
+    "qr-image": "^3.2.0",
+    "sharp": "^0.33.1",
+    "upng-js": "^2.1.0",
+    "zxing": "^0.1.2"
+  },
+  "description": ""
+}
